@@ -1,0 +1,23 @@
+[package]
+name = "my_egui_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = { version = "0.31.0", default-features = false, features = ["serde"] }
+eframe = { version = "0.31.0", default-features = false, features = ["wgpu"] }
+egui-winit = "0.31.0"
+flume = "0.11.1"
+libloading = "0.8.6"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
+strip = true
+
+[[bin]]
+name = "my_egui_app"
+path = "src/main.rs"
+windows_subsystem = "windows"
