@@ -2,7 +2,7 @@
 mod canbus;
 use canbus::CanApp;
 use eframe::egui;
-use egui::{Align, Color32, Rect};
+use egui::{Align, Color32};
 use flume::{unbounded, Receiver, Sender};
 
 #[derive(Clone)]
