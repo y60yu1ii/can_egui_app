@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
 mod canbus;
-
 use canbus::CanApp;
 use eframe::egui;
+use egui::{Align, Color32, Rect};
 use flume::{unbounded, Receiver, Sender};
 
 #[derive(Clone)]
@@ -26,6 +26,7 @@ struct MyApp {
     baud_options: Vec<BaudRateOption>,
     selected_baud: usize,
     device_open: bool,
+    receiving: bool,
 }
 
 impl Default for MyApp {
@@ -104,6 +105,7 @@ impl Default for MyApp {
             baud_options,
             selected_baud: 8, // Default 250 Kbps
             device_open: false,
+            receiving: false,
         }
     }
 }
@@ -153,7 +155,39 @@ impl eframe::App for MyApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("打開裝置").clicked() {
+                // 設備狀態燈
+                let device_color = if self.device_open {
+                    Color32::GREEN
+                } else {
+                    Color32::RED
+                };
+
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(16.0, 16.0),
+                    egui::Layout::left_to_right(Align::Center),
+                    |ui| {
+                        let (_, rect) = ui.allocate_space(egui::Vec2::new(12.0, 12.0)); // 解構 tuple，取 rect
+                        ui.painter().circle_filled(rect.center(), 6.0, device_color);
+                    },
+                );
+                ui.label("CAN");
+
+                let recv_color = if self.receiving {
+                    Color32::GREEN
+                } else {
+                    Color32::RED
+                };
+
+                ui.allocate_ui_with_layout(
+                    egui::Vec2::new(16.0, 16.0),
+                    egui::Layout::left_to_right(Align::Center),
+                    |ui| {
+                        let (_, rect) = ui.allocate_space(egui::Vec2::new(12.0, 12.0)); // 解構 tuple，取 rect
+                        ui.painter().circle_filled(rect.center(), 6.0, recv_color);
+                    },
+                );
+                ui.label("Data");
+                if ui.button("打開").clicked() {
                     self.device_open = self.can_app.open_device(
                         self.dev_type,
                         self.dev_index,
@@ -162,7 +196,7 @@ impl eframe::App for MyApp {
                     );
                 }
 
-                if ui.button("開始接收").clicked() {
+                if ui.button("接收").clicked() {
                     if !self.device_open {
                         self.log.push("錯誤：裝置尚未打開".to_string());
                     } else {
@@ -173,30 +207,39 @@ impl eframe::App for MyApp {
                             self.log_tx.clone(),
                             self.data_tx.clone(),
                         );
+                        self.receiving = true;
                         self.log.push("開始接收訊息".to_string());
                     }
                 }
-                if ui.button("停止接收").clicked() {
+                if ui.button("停止").clicked() {
                     self.can_app.stop_receiving();
                     self.log.push("停止接收".to_string());
+                    self.receiving = false;
                 }
-                if ui.button("關閉裝置").clicked() {
+                if ui.button("關閉").clicked() {
                     self.can_app
                         .close_device(self.dev_type, self.dev_index, self.log_tx.clone());
                     self.device_open = false;
+                }
+                if ui.button("板卡資訊").clicked() {
+                    self.can_app.read_board_info(
+                        self.dev_type,
+                        self.dev_index,
+                        self.log_tx.clone(),
+                    );
                 }
             });
 
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                ui.label("裝置類型:");
+                ui.label("Type:");
                 ui.add(egui::DragValue::new(&mut self.dev_type));
-                ui.label("裝置索引:");
+                ui.label("Index:");
                 ui.add(egui::DragValue::new(&mut self.dev_index));
-                ui.label("CAN 通道:");
+                ui.label("Channel:");
                 ui.add(egui::DragValue::new(&mut self.can_channel));
-                ui.label("CAN波特率:");
+                ui.label("Baud:");
                 egui::ComboBox::from_label("")
                     .selected_text(self.baud_options[self.selected_baud].name)
                     .show_ui(ui, |ui| {
@@ -212,14 +255,6 @@ impl eframe::App for MyApp {
                         self.can_channel,
                         option.timing0,
                         option.timing1,
-                        self.log_tx.clone(),
-                    );
-                }
-
-                if ui.button("讀取板卡資訊").clicked() {
-                    self.can_app.read_board_info(
-                        self.dev_type,
-                        self.dev_index,
                         self.log_tx.clone(),
                     );
                 }

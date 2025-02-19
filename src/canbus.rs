@@ -100,6 +100,7 @@ impl CanLibrary {
 pub struct CanApp {
     pub can_lib: Arc<CanLibrary>,
     pub receiving: Arc<AtomicBool>,
+    pub is_can_initialized: Arc<AtomicBool>,
 }
 
 impl CanApp {
@@ -108,6 +109,7 @@ impl CanApp {
         Self {
             can_lib,
             receiving: Arc::new(AtomicBool::new(false)),
+            is_can_initialized: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -142,9 +144,11 @@ impl CanApp {
             if init_status != 1 {
                 let err_msg = "初始化 CAN 失敗".to_string();
                 let _ = log_tx.send(err_msg);
+                self.is_can_initialized.store(false, Ordering::SeqCst);
                 return false;
             }
             let _ = log_tx.send("CAN 初始化成功".to_string());
+            self.is_can_initialized.store(true, Ordering::SeqCst);
 
             // 3. **讀取板卡資訊**
             let mut board_info = VciBoardInfo::default();
@@ -172,6 +176,7 @@ impl CanApp {
         unsafe {
             let status = (self.can_lib.vci_close_device)(dev_type, dev_index);
             let _ = log_tx.send(format!("裝置已關閉, 狀態: {}", status));
+            self.is_can_initialized.store(false, Ordering::SeqCst);
         }
     }
 
@@ -275,6 +280,11 @@ impl CanApp {
     }
 
     pub fn read_board_info(&self, dev_type: u32, dev_index: u32, log_tx: Sender<String>) {
+        if !self.is_can_initialized.load(Ordering::SeqCst) {
+            let _ = log_tx.send("錯誤: CAN 尚未初始化，無法讀取板卡資訊".to_string());
+            return;
+        }
+
         let mut board_info = VciBoardInfo::default();
         unsafe {
             let status = (self.can_lib.vci_read_board_info)(dev_type, dev_index, &mut board_info);
