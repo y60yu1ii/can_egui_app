@@ -17,10 +17,12 @@ struct MyApp {
     dev_type: u32,
     dev_index: u32,
     can_channel: u32,
-    log: String,
+    log: Vec<String>,
     received_data: Vec<String>,
-    msg_tx: Sender<String>,
-    msg_rx: Receiver<String>,
+    log_tx: Sender<String>,
+    log_rx: Receiver<String>,
+    data_tx: Sender<String>,
+    data_rx: Receiver<String>,
     baud_options: Vec<BaudRateOption>,
     selected_baud: usize,
     device_open: bool,
@@ -85,25 +87,28 @@ impl Default for MyApp {
                 timing1: 0x14,
             },
         ];
-        let (tx, rx) = unbounded();
+        let (log_tx, log_rx) = unbounded();
+        let (data_tx, data_rx) = unbounded();
+
         Self {
             can_app: CanApp::new(),
             dev_type: 4,
             dev_index: 0,
             can_channel: 0,
-            log: String::new(),
+            log: Vec::new(),
             received_data: Vec::new(),
-            msg_tx: tx,
-            msg_rx: rx,
+            log_tx,
+            log_rx,
+            data_tx,
+            data_rx,
             baud_options,
-            selected_baud: 8, // 預設 250 Kbps
+            selected_baud: 8, // Default 250 Kbps
             device_open: false,
         }
     }
 }
 
 impl MyApp {
-    /// 取得最新 `n` 行的文字
     fn get_last_lines(texts: &Vec<String>, n: usize) -> String {
         let start = if texts.len() > n { texts.len() - n } else { 0 };
         texts[start..].join("\n")
@@ -113,7 +118,6 @@ impl MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut fonts = egui::FontDefinitions::default();
-
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -132,7 +136,14 @@ impl eframe::App for MyApp {
 
         ctx.set_fonts(fonts);
 
-        while let Ok(msg) = self.msg_rx.try_recv() {
+        while let Ok(msg) = self.log_rx.try_recv() {
+            self.log.push(msg);
+            if self.log.len() > 100 {
+                self.log.drain(0..(self.log.len() - 100));
+            }
+        }
+
+        while let Ok(msg) = self.data_rx.try_recv() {
             self.received_data.push(msg);
             if self.received_data.len() > 100 {
                 self.received_data
@@ -143,35 +154,35 @@ impl eframe::App for MyApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("打開裝置").clicked() {
-                    if self.can_app.open_device(self.dev_type, self.dev_index) {
-                        self.log.push_str("裝置打開成功\n");
-                        self.device_open = true;
-                    } else {
-                        self.log.push_str("裝置打開失敗\n");
-                        self.device_open = false;
-                    }
+                    self.device_open = self.can_app.open_device(
+                        self.dev_type,
+                        self.dev_index,
+                        self.can_channel,
+                        self.log_tx.clone(),
+                    );
                 }
+
                 if ui.button("開始接收").clicked() {
                     if !self.device_open {
-                        self.log.push_str("錯誤：裝置尚未打開\n");
+                        self.log.push("錯誤：裝置尚未打開".to_string());
                     } else {
-                        let tx_clone = self.msg_tx.clone();
                         self.can_app.start_receiving(
                             self.dev_type,
                             self.dev_index,
                             self.can_channel,
-                            tx_clone,
+                            self.log_tx.clone(),
+                            self.data_tx.clone(),
                         );
-                        self.log.push_str("開始接收訊息\n");
+                        self.log.push("開始接收訊息".to_string());
                     }
                 }
                 if ui.button("停止接收").clicked() {
                     self.can_app.stop_receiving();
-                    self.log.push_str("停止接收\n");
+                    self.log.push("停止接收".to_string());
                 }
                 if ui.button("關閉裝置").clicked() {
-                    self.can_app.close_device(self.dev_type, self.dev_index);
-                    self.log.push_str("裝置已關閉\n");
+                    self.can_app
+                        .close_device(self.dev_type, self.dev_index, self.log_tx.clone());
                     self.device_open = false;
                 }
             });
@@ -193,37 +204,30 @@ impl eframe::App for MyApp {
                             ui.selectable_value(&mut self.selected_baud, i, option.name);
                         }
                     });
-
                 if ui.button("重設波特率").clicked() {
                     let option = &self.baud_options[self.selected_baud];
-                    match self.can_app.reconnect_device(
+                    self.can_app.reconnect_device(
                         self.dev_type,
                         self.dev_index,
-                        0,
-                        1,
+                        self.can_channel,
                         option.timing0,
                         option.timing1,
-                    ) {
-                        Ok(()) => self.log.push_str("裝置重新連接成功\n"),
-                        Err(e) => self.log.push_str(&format!("重設波特率失敗: {}\n", e)),
-                    }
+                        self.log_tx.clone(),
+                    );
                 }
 
                 if ui.button("讀取板卡資訊").clicked() {
-                    match self.can_app.read_board_info(self.dev_type, self.dev_index) {
-                        Ok(info) => self.log.push_str(&format!(
-                            "板卡資訊: Serial={}, FW={}\n",
-                            info.serial_number, info.firmware_version
-                        )),
-                        Err(e) => self.log.push_str(&format!("讀取板卡資訊失敗: {}\n", e)),
-                    }
+                    self.can_app.read_board_info(
+                        self.dev_type,
+                        self.dev_index,
+                        self.log_tx.clone(),
+                    );
                 }
             });
             ui.separator();
 
             let rec_text = MyApp::get_last_lines(&self.received_data, 8);
-            let log_text =
-                MyApp::get_last_lines(&self.log.lines().map(|s| s.to_owned()).collect(), 8);
+            let log_text = MyApp::get_last_lines(&self.log, 8);
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -241,7 +245,6 @@ impl eframe::App for MyApp {
         ctx.request_repaint();
     }
 }
-
 fn main() {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
